@@ -1,7 +1,6 @@
 import React, { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import { Spin } from 'antd';
-import { MainLayout, TeacherLayout, AdminLayout } from '@/components';
+import { MainLayout, TeacherLayout, AdminLayout, PageLoading } from '@/components';
 import { useUserStore } from '@/store';
 
 const LoginPage = lazy(() => import('@/pages/Login'));
@@ -71,11 +70,7 @@ const LoginGuard = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
-const LoadingFallback = () => (
-  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-    <Spin size="large" tip="加载中..." />
-  </div>
-);
+const LoadingFallback = () => <PageLoading />;
 
 export const router = createBrowserRouter([
   {

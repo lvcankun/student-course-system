@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react';
-import { Card, Table, Button, Input, Space, Typography, Modal, Descriptions, Avatar, Collapse, Badge, Empty } from 'antd';
-import { SearchOutlined, UserOutlined, EyeOutlined, UserOutlined as UserIcon } from '@ant-design/icons';
+import { Card, Table, Button, Input, Space, Typography, Modal, Descriptions, Avatar, Collapse, Badge, Empty, Select } from 'antd';
+import { SearchOutlined, UserOutlined, EyeOutlined } from '@ant-design/icons';
 import { useFetch } from '@/hooks';
 import type { Student, PaginatedResponse, Course } from '@/types';
 
 const { Title } = Typography;
 const { Panel } = Collapse;
+const { Option } = Select;
 
 interface StudentWithCourse extends Student {
   courseName?: string;
@@ -15,13 +16,16 @@ interface StudentWithCourse extends Student {
 
 const TeacherStudentsPage = () => {
   const [keyword, setKeyword] = useState('');
-  const [courseKeyword, setCourseKeyword] = useState('');
+  const [searchType, setSearchType] = useState<'student' | 'course'>('student');
   const [selectedStudent, setSelectedStudent] = useState<StudentWithCourse | null>(null);
   
+  // 只有搜索学生时才发送keyword到后端
+  const backendKeyword = searchType === 'student' ? keyword : '';
+  
   const { data, isLoading } = useFetch<PaginatedResponse<StudentWithCourse>>(
-    ['teacher-students', 1, 100, keyword],
+    ['teacher-students', 1, 100, backendKeyword],
     '/teacher/students',
-    { page: 1, pageSize: 100, keyword }
+    { page: 1, pageSize: 100, keyword: backendKeyword }
   );
   
   const { data: coursesData } = useFetch<PaginatedResponse<Course>>(
@@ -59,6 +63,7 @@ const TeacherStudentsPage = () => {
     },
   ];
 
+  // 按课程分组
   const studentsByCourse = useMemo(() => {
     if (!data?.list) return {};
     
@@ -74,34 +79,46 @@ const TeacherStudentsPage = () => {
     return grouped;
   }, [data?.list]);
 
+  // 根据搜索类型过滤
   const filteredCourses = useMemo(() => {
-    if (!courseKeyword) return Object.entries(studentsByCourse);
+    const entries = Object.entries(studentsByCourse);
     
-    return Object.entries(studentsByCourse).filter(([courseName]) => 
-      courseName.toLowerCase().includes(courseKeyword.toLowerCase())
-    );
-  }, [studentsByCourse, courseKeyword]);
+    if (!keyword) return entries;
+    
+    if (searchType === 'student') {
+      // 搜索学生时，后端已经过滤了，直接返回
+      return entries;
+    } else {
+      // 搜索课程时，在前端过滤课程名称
+      return entries.filter(([courseName]) => 
+        courseName.toLowerCase().includes(keyword.toLowerCase())
+      );
+    }
+  }, [studentsByCourse, keyword, searchType]);
 
   return (
     <div>
       <Title level={4} style={{ marginBottom: 24 }}>选课学生</Title>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Card>
-          <Space style={{ marginBottom: 16 }}>
+          <Space>
+            <Select
+              value={searchType}
+              onChange={(value) => {
+                setSearchType(value);
+                setKeyword(''); // 切换搜索类型时清空关键词
+              }}
+              style={{ width: 130 }}
+            >
+              <Option value="student">学号/姓名</Option>
+              <Option value="course">课程名称</Option>
+            </Select>
             <Input.Search 
-              placeholder="搜索学号或姓名" 
+              placeholder={searchType === 'student' ? '请输入学号或姓名' : '请输入课程名称'} 
               allowClear 
-              style={{ width: 200 }} 
+              style={{ width: 250 }} 
               value={keyword} 
               onChange={(e) => setKeyword(e.target.value)} 
-              prefix={<SearchOutlined />} 
-            />
-            <Input.Search 
-              placeholder="搜索课程名称" 
-              allowClear 
-              style={{ width: 200 }} 
-              value={courseKeyword} 
-              onChange={(e) => setCourseKeyword(e.target.value)} 
               prefix={<SearchOutlined />} 
             />
           </Space>
@@ -109,7 +126,7 @@ const TeacherStudentsPage = () => {
         
         {filteredCourses.length === 0 ? (
           <Card>
-            <Empty description="暂无选课学生数据" />
+            <Empty description={keyword ? '未找到匹配的结果' : '暂无选课学生数据'} />
           </Card>
         ) : (
           <Collapse defaultActiveKey={filteredCourses.map(([name]) => name)}>

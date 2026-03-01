@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Card, Tabs, Statistic, Row, Col, Alert, Skeleton, Button, Switch, message, Modal } from 'antd';
+import { Card, Tabs, Statistic, Row, Col, Alert, Button, Switch, message, Modal } from 'antd';
 import { BookOutlined, ClockCircleOutlined, CheckCircleOutlined, TeamOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { CourseList } from '@/components/course';
+import { CourseCardSkeleton } from '@/components/skeleton';
 import { useCourseStore, useSelectionStore, useUserStore } from '@/store';
 import { useFetch, useDebounce, useNetworkStatus } from '@/hooks';
 import { comprehensiveConflictCheck, formatTimeSlot } from '@/utils/conflictDetection';
@@ -266,7 +267,11 @@ const CourseSelectionPage = () => {
         }
       >
         {isLoading ? (
-          <Skeleton active paragraph={{ rows: 8 }} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <CourseCardSkeleton key={i} />
+            ))}
+          </div>
         ) : (
           <CourseList
             courses={data?.list || []}
