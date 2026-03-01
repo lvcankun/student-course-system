@@ -1446,6 +1446,262 @@ app.get('/api/admin/selection-rules', authenticateToken, async (req, res) => {
   }
 });
 
+// ==================== 成绩管理API ====================
+
+// 获取教师的课程列表（用于成绩录入）
+app.get('/api/teacher/grade-courses', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') {
+      return res.status(403).json({ code: 403, message: '只有教师可以访问', data: null });
+    }
+    
+    const courses = await query(`
+      SELECT c.id, c.name, c.code, c.semester, c.credit,
+        COUNT(DISTINCT s.student_id) as student_count
+      FROM courses c
+      LEFT JOIN selections s ON c.id = s.course_id AND s.status = 'selected'
+      WHERE c.teacher_id = ? AND c.status = 'published'
+      GROUP BY c.id
+      ORDER BY c.semester DESC, c.name
+    `, [req.user.id]);
+    
+    res.json({ code: 0, message: 'success', data: courses });
+  } catch (error) {
+    console.error('获取课程列表错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 获取课程学生成绩列表
+app.get('/api/teacher/grades/:courseId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') {
+      return res.status(403).json({ code: 403, message: '只有教师可以访问', data: null });
+    }
+    
+    const { courseId } = req.params;
+    const { semester } = req.query;
+    
+    // 验证课程归属
+    const courses = await query('SELECT * FROM courses WHERE id = ? AND teacher_id = ?', [courseId, req.user.id]);
+    if (courses.length === 0) {
+      return res.status(404).json({ code: 404, message: '课程不存在或无权访问', data: null });
+    }
+    
+    const course = courses[0];
+    const currentSemester = semester || course.semester;
+    
+    // 获取选课学生及成绩
+    const students = await query(`
+      SELECT s.id as selection_id, s.student_id, u.name as student_name, u.student_id as student_number,
+        u.major, u.class_name, g.id as grade_id, g.score, g.grade_level, g.grade_type, g.status as grade_status,
+        g.remark, g.created_at, g.updated_at
+      FROM selections s
+      JOIN users u ON s.student_id = u.id
+      LEFT JOIN grades g ON g.student_id = g.student_id AND s.course_id = g.course_id AND g.semester = ?
+      WHERE s.course_id = ? AND s.status = 'selected'
+      ORDER BY u.student_id
+    `, [currentSemester, courseId]);
+    
+    res.json({ 
+      code: 0, 
+      message: 'success', 
+      data: {
+        course: {
+          id: course.id,
+          name: course.name,
+          code: course.code,
+          semester: currentSemester,
+          credit: course.credit
+        },
+        students: students.map(s => ({
+          studentId: s.student_id,
+          studentNumber: s.student_number,
+          studentName: s.student_name,
+          major: s.major,
+          className: s.class_name,
+          gradeId: s.grade_id,
+          score: s.score,
+          gradeLevel: s.grade_level,
+          gradeType: s.grade_type,
+          gradeStatus: s.grade_status,
+          remark: s.remark,
+          createdAt: s.created_at,
+          updatedAt: s.updated_at
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('获取成绩列表错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 录入/修改单个成绩
+app.post('/api/teacher/grades', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') {
+      return res.status(403).json({ code: 403, message: '只有教师可以录入成绩', data: null });
+    }
+    
+    const { courseId, studentId, score, gradeLevel, gradeType, remark } = req.body;
+    
+    // 验证课程归属
+    const courses = await query('SELECT * FROM courses WHERE id = ? AND teacher_id = ?', [courseId, req.user.id]);
+    if (courses.length === 0) {
+      return res.status(404).json({ code: 404, message: '课程不存在或无权访问', data: null });
+    }
+    
+    const course = courses[0];
+    
+    // 检查是否已有成绩
+    const existingGrades = await query(
+      'SELECT * FROM grades WHERE student_id = ? AND course_id = ? AND semester = ?',
+      [studentId, courseId, course.semester]
+    );
+    
+    if (existingGrades.length > 0) {
+      const existing = existingGrades[0];
+      
+      // 检查是否已提交
+      if (existing.status === 'submitted' || existing.status === 'approved') {
+        return res.status(400).json({ code: 400, message: '成绩已提交，无法修改', data: null });
+      }
+      
+      // 更新成绩
+      await query(
+        'UPDATE grades SET score = ?, grade_level = ?, grade_type = ?, remark = ?, updated_at = NOW() WHERE id = ?',
+        [score, gradeLevel, gradeType, remark, existing.id]
+      );
+      
+      res.json({ code: 0, message: '成绩更新成功', data: { id: existing.id } });
+    } else {
+      // 创建新成绩
+      const gradeId = `grade-${uuidv4()}`;
+      await query(
+        'INSERT INTO grades (id, student_id, course_id, teacher_id, semester, score, grade_level, grade_type, remark, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [gradeId, studentId, courseId, req.user.id, course.semester, score, gradeLevel, gradeType, remark, 'draft']
+      );
+      
+      res.json({ code: 0, message: '成绩录入成功', data: { id: gradeId } });
+    }
+  } catch (error) {
+    console.error('录入成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 批量录入成绩
+app.post('/api/teacher/grades/batch', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') {
+      return res.status(403).json({ code: 403, message: '只有教师可以录入成绩', data: null });
+    }
+    
+    const { courseId, grades } = req.body;
+    
+    if (!Array.isArray(grades) || grades.length === 0) {
+      return res.status(400).json({ code: 400, message: '成绩数据无效', data: null });
+    }
+    
+    // 验证课程归属
+    const courses = await query('SELECT * FROM courses WHERE id = ? AND teacher_id = ?', [courseId, req.user.id]);
+    if (courses.length === 0) {
+      return res.status(404).json({ code: 404, message: '课程不存在或无权访问', data: null });
+    }
+    
+    const course = courses[0];
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const grade of grades) {
+      try {
+        const { studentId, score, gradeLevel, gradeType, remark } = grade;
+        
+        // 检查是否已有成绩
+        const existingGrades = await query(
+          'SELECT * FROM grades WHERE student_id = ? AND course_id = ? AND semester = ?',
+          [studentId, courseId, course.semester]
+        );
+        
+        if (existingGrades.length > 0) {
+          const existing = existingGrades[0];
+          if (existing.status === 'draft' || existing.status === 'rejected') {
+            await query(
+              'UPDATE grades SET score = ?, grade_level = ?, grade_type = ?, remark = ?, status = ?, updated_at = NOW() WHERE id = ?',
+              [score, gradeLevel, gradeType, remark, 'draft', existing.id]
+            );
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } else {
+          const gradeId = `grade-${uuidv4()}`;
+          await query(
+            'INSERT INTO grades (id, student_id, course_id, teacher_id, semester, score, grade_level, grade_type, remark, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [gradeId, studentId, courseId, req.user.id, course.semester, score, gradeLevel, gradeType, remark, 'draft']
+          );
+          successCount++;
+        }
+      } catch {
+        failCount++;
+      }
+    }
+    
+    res.json({ 
+      code: 0, 
+      message: `批量录入完成：成功 ${successCount} 条，失败 ${failCount} 条`, 
+      data: { successCount, failCount }
+    });
+  } catch (error) {
+    console.error('批量录入成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 提交成绩
+app.post('/api/teacher/grades/submit/:courseId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') {
+      return res.status(403).json({ code: 403, message: '只有教师可以提交成绩', data: null });
+    }
+    
+    const { courseId } = req.params;
+    
+    // 验证课程归属
+    const courses = await query('SELECT * FROM courses WHERE id = ? AND teacher_id = ?', [courseId, req.user.id]);
+    if (courses.length === 0) {
+      return res.status(404).json({ code: 404, message: '课程不存在或无权访问', data: null });
+    }
+    
+    // 检查是否有未录入成绩的学生
+    const ungradedCount = await query(`
+      SELECT COUNT(*) as count FROM selections s
+      LEFT JOIN grades g ON s.student_id = g.student_id AND s.course_id = g.course_id
+      WHERE s.course_id = ? AND s.status = 'selected' AND g.id IS NULL
+    `, [courseId]);
+    
+    if (ungradedCount[0].count > 0) {
+      return res.status(400).json({ 
+        code: 400, 
+        message: `还有 ${ungradedCount[0].count} 名学生未录入成绩`, 
+        data: null 
+      });
+    }
+    
+    // 更新成绩状态为已提交
+    await query(
+      'UPDATE grades SET status = ?, submitted_at = NOW() WHERE course_id = ? AND status = ?',
+      ['submitted', courseId, 'draft']
+    );
+    
+    res.json({ code: 0, message: '成绩已提交审核', data: null });
+  } catch (error) {
+    console.error('提交成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
 // ==================== 启动服务器 ====================
 
 async function startServer() {

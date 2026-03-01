@@ -10,6 +10,7 @@ import {
   BellOutlined,
   SettingOutlined,
   StarOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useUserStore, useUIStore } from '@/store';
@@ -49,6 +50,11 @@ const TeacherLayout = ({ children }: TeacherLayoutProps) => {
       key: '/teacher/reviews',
       icon: <StarOutlined />,
       label: '课程评价',
+    },
+    {
+      key: '/teacher/grades',
+      icon: <FileTextOutlined />,
+      label: '成绩录入',
     },
   ];
 
