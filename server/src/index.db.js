@@ -1119,6 +1119,28 @@ app.get('/api/admin/statistics', authenticateToken, async (req, res) => {
       LIMIT 5
     `);
     
+    // 计算选课率（已选课学生数 / 总学生数）
+    const studentsWithSelections = await query(`
+      SELECT COUNT(DISTINCT student_id) as count FROM selections WHERE status = 'selected'
+    `);
+    const selectionRate = studentCount[0].count > 0 
+      ? Math.round((studentsWithSelections[0].count / studentCount[0].count) * 100) 
+      : 0;
+    
+    // 计算平均已选学分
+    const avgCreditsResult = await query(`
+      SELECT COALESCE(AVG(total_credits), 0) as avgCredits
+      FROM (
+        SELECT u.id, SUM(c.credit) as total_credits
+        FROM users u
+        LEFT JOIN selections s ON u.id = s.student_id AND s.status = 'selected'
+        LEFT JOIN courses c ON s.course_id = c.id
+        WHERE u.role = 'student'
+        GROUP BY u.id
+      ) as student_credits
+    `);
+    const avgCredits = Math.round(avgCreditsResult[0].avgCredits * 10) / 10;
+    
     res.json({
       code: 0,
       message: 'success',
@@ -1127,7 +1149,9 @@ app.get('/api/admin/statistics', authenticateToken, async (req, res) => {
         totalTeachers: teacherCount[0].count,
         totalCourses: courseCount[0].count,
         totalSelections: selectionCount[0].count,
-        departmentStats
+        departmentStats,
+        selectionRate,
+        avgCredits
       }
     });
   } catch (error) {
