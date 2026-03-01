@@ -1,0 +1,17 @@
+export { default as LoginPage } from './Login';
+export { default as ForgotPasswordPage } from './ForgotPassword';
+export { default as ProfilePage } from './Profile';
+export { default as NotificationsPage } from './Notifications';
+export { default as CourseSelectionPage } from './student/Courses';
+export { default as MySchedulePage } from './student/Schedule';
+export { default as MySelectionsPage } from './student/Selections';
+export { default as TeacherCoursesPage } from './teacher/Courses';
+export { default as TeacherStudentsPage } from './teacher/Students';
+export { default as TeacherSchedulePage } from './teacher/Schedule';
+export { default as AdminDashboardPage } from './admin/Dashboard';
+export { default as AdminStudentsPage } from './admin/Students';
+export { default as AdminTeachersPage } from './admin/Teachers';
+export { default as AdminCoursesPage } from './admin/Courses';
+export { default as AdminAuditsPage } from './admin/Audits';
+export { default as AdminLogsPage } from './admin/Logs';
+export { default as AdminSelectionRulesPage } from './admin/SelectionRules';
