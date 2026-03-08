@@ -1066,11 +1066,14 @@ app.get('/api/admin/reviews', authenticateToken, async (req, res) => {
       let tags = [];
       try {
         if (r.tags) {
-          // 尝试解析 JSON
-          if (typeof r.tags === 'string' && r.tags.startsWith('[')) {
+          // 如果已经是数组，直接使用
+          if (Array.isArray(r.tags)) {
+            tags = r.tags;
+          } else if (typeof r.tags === 'string' && r.tags.startsWith('[')) {
+            // JSON 字符串格式
             tags = JSON.parse(r.tags);
           } else if (typeof r.tags === 'string') {
-            // 如果不是 JSON 数组格式，按逗号分割
+            // 逗号分隔格式
             tags = r.tags.split(',').filter(Boolean);
           }
         }
