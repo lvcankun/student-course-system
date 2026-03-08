@@ -1062,10 +1062,34 @@ app.get('/api/admin/reviews', authenticateToken, async (req, res) => {
     
     const reviews = await query(sql, params);
     
-    const processedReviews = reviews.map(r => ({
-      ...r,
-      tags: r.tags ? JSON.parse(r.tags) : []
-    }));
+    const processedReviews = reviews.map(r => {
+      let tags = [];
+      try {
+        if (r.tags) {
+          // 尝试解析 JSON
+          if (typeof r.tags === 'string' && r.tags.startsWith('[')) {
+            tags = JSON.parse(r.tags);
+          } else if (typeof r.tags === 'string') {
+            // 如果不是 JSON 数组格式，按逗号分割
+            tags = r.tags.split(',').filter(Boolean);
+          }
+        }
+      } catch (e) {
+        tags = [];
+      }
+      return {
+        id: r.id,
+        courseId: r.course_id,
+        courseName: r.course_name,
+        studentId: r.student_id,
+        studentName: r.student_name,
+        rating: r.rating,
+        content: r.content,
+        tags,
+        isAnonymous: r.is_anonymous,
+        createdAt: r.created_at
+      };
+    });
     
     const start = (parseInt(page) - 1) * parseInt(pageSize);
     const paginatedReviews = processedReviews.slice(start, start + parseInt(pageSize));
@@ -1081,6 +1105,7 @@ app.get('/api/admin/reviews', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('获取评价列表错误:', error);
     res.status(500).json({ code: 500, message: error.message, data: null });
   }
 });
@@ -1498,7 +1523,7 @@ app.get('/api/teacher/grades/:courseId', authenticateToken, async (req, res) => 
         g.remark, g.created_at, g.updated_at
       FROM selections s
       JOIN users u ON s.student_id = u.id
-      LEFT JOIN grades g ON g.student_id = g.student_id AND s.course_id = g.course_id AND g.semester = ?
+      LEFT JOIN grades g ON s.student_id = g.student_id AND s.course_id = g.course_id AND g.semester = ?
       WHERE s.course_id = ? AND s.status = 'selected'
       ORDER BY u.student_id
     `, [currentSemester, courseId]);
@@ -1563,15 +1588,16 @@ app.post('/api/teacher/grades', authenticateToken, async (req, res) => {
     if (existingGrades.length > 0) {
       const existing = existingGrades[0];
       
-      // 检查是否已提交
+      // 检查是否已提交或已通过（已驳回可以重新修改）
       if (existing.status === 'submitted' || existing.status === 'approved') {
         return res.status(400).json({ code: 400, message: '成绩已提交，无法修改', data: null });
       }
       
-      // 更新成绩
+      // 更新成绩（rejected状态重置为draft）
+      const newStatus = existing.status === 'rejected' ? 'draft' : existing.status;
       await query(
-        'UPDATE grades SET score = ?, grade_level = ?, grade_type = ?, remark = ?, updated_at = NOW() WHERE id = ?',
-        [score, gradeLevel, gradeType, remark, existing.id]
+        'UPDATE grades SET score = ?, grade_level = ?, grade_type = ?, remark = ?, status = ?, updated_at = NOW() WHERE id = ?',
+        [score, gradeLevel, gradeType, remark, newStatus, existing.id]
       );
       
       res.json({ code: 0, message: '成绩更新成功', data: { id: existing.id } });
@@ -1667,6 +1693,7 @@ app.post('/api/teacher/grades/submit/:courseId', authenticateToken, async (req, 
     }
     
     const { courseId } = req.params;
+    const { force } = req.query;
     
     // 验证课程归属
     const courses = await query('SELECT * FROM courses WHERE id = ? AND teacher_id = ?', [courseId, req.user.id]);
@@ -1674,30 +1701,300 @@ app.post('/api/teacher/grades/submit/:courseId', authenticateToken, async (req, 
       return res.status(404).json({ code: 404, message: '课程不存在或无权访问', data: null });
     }
     
-    // 检查是否有未录入成绩的学生
+    // 检查是否有待提交的成绩（draft或rejected状态）
+    const gradedCount = await query(`
+      SELECT COUNT(*) as count FROM grades 
+      WHERE course_id = ? AND status IN ('draft', 'rejected')
+    `, [courseId]);
+    
+    if (gradedCount[0].count === 0) {
+      return res.status(400).json({ 
+        code: 400, 
+        message: '没有待提交的成绩', 
+        data: null 
+      });
+    }
+    
+    // 检查是否有学生未录入成绩
     const ungradedCount = await query(`
       SELECT COUNT(*) as count FROM selections s
       LEFT JOIN grades g ON s.student_id = g.student_id AND s.course_id = g.course_id
       WHERE s.course_id = ? AND s.status = 'selected' AND g.id IS NULL
     `, [courseId]);
     
-    if (ungradedCount[0].count > 0) {
+    if (ungradedCount[0].count > 0 && force !== 'true') {
       return res.status(400).json({ 
         code: 400, 
-        message: `还有 ${ungradedCount[0].count} 名学生未录入成绩`, 
-        data: null 
+        message: `还有 ${ungradedCount[0].count} 名学生未录入成绩，确定要提交已录入的成绩吗？`, 
+        data: { ungradedCount: ungradedCount[0].count, needConfirm: true }
       });
     }
     
-    // 更新成绩状态为已提交
+    // 更新成绩状态为已提交（draft和rejected状态都可以提交）
     await query(
-      'UPDATE grades SET status = ?, submitted_at = NOW() WHERE course_id = ? AND status = ?',
-      ['submitted', courseId, 'draft']
+      'UPDATE grades SET status = ?, submitted_at = NOW() WHERE course_id = ? AND status IN (?, ?)',
+      ['submitted', courseId, 'draft', 'rejected']
     );
     
     res.json({ code: 0, message: '成绩已提交审核', data: null });
   } catch (error) {
     console.error('提交成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// ==================== 学生成绩查询API ====================
+
+// 学生查询自己的成绩
+app.get('/api/student/grades', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ code: 403, message: '只有学生可以查询成绩', data: null });
+    }
+    
+    const { semester } = req.query;
+    
+    let sql = `
+      SELECT g.id, g.score, g.grade_level, g.grade_type, g.status, g.remark, g.created_at,
+        c.id as course_id, c.name as course_name, c.code as course_code, c.credit, c.semester,
+        u.name as teacher_name
+      FROM grades g
+      JOIN courses c ON g.course_id = c.id
+      JOIN users u ON c.teacher_id = u.id
+      WHERE g.student_id = ? AND g.status = 'approved'
+    `;
+    const params = [req.user.id];
+    
+    if (semester) {
+      sql += ' AND c.semester = ?';
+      params.push(semester);
+    }
+    
+    sql += ' ORDER BY g.created_at DESC';
+    
+    const grades = await query(sql, params);
+    
+    // 计算统计信息
+    const stats = {
+      totalCourses: grades.length,
+      totalCredits: grades.reduce((sum, g) => sum + (g.credit || 0), 0),
+      avgScore: grades.length > 0 
+        ? (grades.reduce((sum, g) => sum + (g.score || 0), 0) / grades.length).toFixed(1)
+        : 0,
+      excellentCount: grades.filter(g => (g.score || 0) >= 90).length,
+      failCount: grades.filter(g => (g.score || 0) < 60).length
+    };
+    
+    res.json({ 
+      code: 0, 
+      message: 'success', 
+      data: {
+        grades: grades.map(g => ({
+          id: g.id,
+          courseId: g.course_id,
+          courseName: g.course_name,
+          courseCode: g.course_code,
+          credit: g.credit,
+          semester: g.semester,
+          teacherName: g.teacher_name,
+          score: g.score,
+          gradeLevel: g.grade_level,
+          gradeType: g.grade_type,
+          status: g.status,
+          remark: g.remark,
+          createdAt: g.created_at
+        })),
+        stats
+      }
+    });
+  } catch (error) {
+    console.error('查询成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// ==================== 管理员成绩管理API ====================
+
+// 管理员获取成绩列表
+app.get('/api/admin/grades', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ code: 403, message: '只有管理员可以访问', data: null });
+    }
+    
+    const { page = 1, pageSize = 10, courseId, studentId, status, semester } = req.query;
+    
+    let sql = `
+      SELECT g.id, g.score, g.grade_level, g.grade_type, g.status, g.remark, g.created_at, g.submitted_at,
+        c.id as course_id, c.name as course_name, c.code as course_code, c.credit, c.semester,
+        u.id as student_id, u.name as student_name, u.student_id as student_number, u.class_name
+      FROM grades g
+      JOIN courses c ON g.course_id = c.id
+      JOIN users u ON g.student_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (courseId) {
+      sql += ' AND g.course_id = ?';
+      params.push(courseId);
+    }
+    if (studentId) {
+      sql += ' AND g.student_id = ?';
+      params.push(studentId);
+    }
+    if (status) {
+      sql += ' AND g.status = ?';
+      params.push(status);
+    }
+    if (semester) {
+      sql += ' AND c.semester = ?';
+      params.push(semester);
+    }
+    
+    const grades = await query(sql, params);
+    
+    // 获取全局统计数据（不受筛选条件影响）
+    const totalStats = await query(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+        SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as draft
+      FROM grades
+    `);
+    
+    const start = (parseInt(page) - 1) * parseInt(pageSize);
+    const paginatedGrades = grades.slice(start, start + parseInt(pageSize));
+    
+    res.json({
+      code: 0,
+      message: 'success',
+      data: {
+        list: paginatedGrades.map(g => ({
+          id: g.id,
+          courseId: g.course_id,
+          courseName: g.course_name,
+          courseCode: g.course_code,
+          credit: g.credit,
+          semester: g.semester,
+          studentId: g.student_id,
+          studentName: g.student_name,
+          studentNumber: g.student_number,
+          className: g.class_name,
+          score: g.score,
+          gradeLevel: g.grade_level,
+          gradeType: g.grade_type,
+          status: g.status,
+          remark: g.remark,
+          createdAt: g.created_at,
+          submittedAt: g.submitted_at
+        })),
+        total: grades.length,
+        page: parseInt(page),
+        pageSize: parseInt(pageSize),
+        statistics: {
+          total: totalStats[0].total || 0,
+          pending: totalStats[0].pending || 0,
+          approved: totalStats[0].approved || 0,
+          rejected: totalStats[0].rejected || 0,
+          draft: totalStats[0].draft || 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('获取成绩列表错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 管理员审核成绩
+app.put('/api/admin/grades/:id/approve', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ code: 403, message: '只有管理员可以审核成绩', data: null });
+    }
+    
+    await query(
+      'UPDATE grades SET status = ?, approved_at = NOW(), approved_by = ? WHERE id = ?',
+      ['approved', req.user.id, req.params.id]
+    );
+    
+    res.json({ code: 0, message: '成绩审核通过', data: null });
+  } catch (error) {
+    console.error('审核成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 管理员驳回成绩
+app.put('/api/admin/grades/:id/reject', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ code: 403, message: '只有管理员可以审核成绩', data: null });
+    }
+    
+    await query(
+      'UPDATE grades SET status = ? WHERE id = ?',
+      ['rejected', req.params.id]
+    );
+    
+    res.json({ code: 0, message: '成绩已驳回', data: null });
+  } catch (error) {
+    console.error('驳回成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 管理员批量审核成绩
+app.put('/api/admin/grades/batch-approve', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ code: 403, message: '只有管理员可以审核成绩', data: null });
+    }
+    
+    const { ids } = req.body;
+    
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ code: 400, message: '请选择要审核的成绩', data: null });
+    }
+    
+    const placeholders = ids.map(() => '?').join(',');
+    await query(
+      `UPDATE grades SET status = ?, approved_at = NOW(), approved_by = ? WHERE id IN (${placeholders})`,
+      ['approved', req.user.id, ...ids]
+    );
+    
+    res.json({ code: 0, message: `已审核 ${ids.length} 条成绩`, data: null });
+  } catch (error) {
+    console.error('批量审核成绩错误:', error);
+    res.status(500).json({ code: 500, message: error.message, data: null });
+  }
+});
+
+// 管理员批量驳回成绩
+app.put('/api/admin/grades/batch-reject', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ code: 403, message: '只有管理员可以审核成绩', data: null });
+    }
+    
+    const { ids } = req.body;
+    
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ code: 400, message: '请选择要驳回的成绩', data: null });
+    }
+    
+    const placeholders = ids.map(() => '?').join(',');
+    await query(
+      `UPDATE grades SET status = ? WHERE id IN (${placeholders})`,
+      ['rejected', ...ids]
+    );
+    
+    res.json({ code: 0, message: `已驳回 ${ids.length} 条成绩`, data: null });
+  } catch (error) {
+    console.error('批量驳回成绩错误:', error);
     res.status(500).json({ code: 500, message: error.message, data: null });
   }
 });
@@ -1708,6 +2005,25 @@ async function startServer() {
   try {
     // 测试数据库连接
     await getConnection();
+    
+    // 创建 course_reviews 表（如果不存在）
+    await query(`
+      CREATE TABLE IF NOT EXISTS course_reviews (
+        id VARCHAR(36) PRIMARY KEY,
+        course_id VARCHAR(36) NOT NULL,
+        student_id VARCHAR(36) NOT NULL,
+        student_name VARCHAR(50),
+        content TEXT,
+        rating INT,
+        tags TEXT,
+        is_anonymous TINYINT DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_course_id (course_id),
+        INDEX idx_student_id (student_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('✅ course_reviews 表检查完成');
     
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 后端服务已启动: http://localhost:${PORT}`);

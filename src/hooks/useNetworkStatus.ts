@@ -4,6 +4,7 @@ type NetworkStatus = 'online' | 'slow' | 'offline';
 
 export const useNetworkStatus = () => {
   const [status, setStatus] = useState<NetworkStatus>('online');
+  
 
   const checkSpeed = useCallback(async () => {
     try {
@@ -11,6 +12,7 @@ export const useNetworkStatus = () => {
       await fetch('/api/ping', { method: 'HEAD', cache: 'no-cache' });
       const duration = performance.now() - start;
       setStatus(duration > 1000 ? 'slow' : 'online');
+
     } catch {
       setStatus('offline');
     }

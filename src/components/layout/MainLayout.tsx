@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   HomeOutlined,
   SettingOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useUserStore, useUIStore, useSelectionStore } from '@/store';
@@ -56,6 +57,11 @@ const MainLayout = ({ children }: MainLayoutProps) => {
       key: '/student/selections',
       icon: <HomeOutlined />,
       label: '已选课程',
+    },
+    {
+      key: '/student/grades',
+      icon: <TrophyOutlined />,
+      label: '我的成绩',
     },
   ];
 

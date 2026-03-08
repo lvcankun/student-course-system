@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
-import { Card, Table, Button, Space, Typography, Select, InputNumber, Input, Tag, Modal, message, Upload, Tooltip, Radio, Row, Col, Statistic } from 'antd';
-import { UploadOutlined, DownloadOutlined, SaveOutlined, SendOutlined, EditOutlined, FileExcelOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Space, Typography, Select, InputNumber, Input, Tag, Modal, message, Upload, Radio, Row, Col, Statistic } from 'antd';
+import { UploadOutlined, DownloadOutlined, SaveOutlined, SendOutlined, EditOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { useFetch } from '@/hooks';
 import { api } from '@/services';
@@ -45,7 +45,7 @@ const gradeLevelMap: Record<string, { label: string; color: string; range: [numb
 const TeacherGradesPage = () => {
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [editMode, setEditMode] = useState(false);
-  const [editingStudents, setEditingStudents] = useState<GradeStudent[]>([]);
+  const [editingStudents, setEditingStudents] = useState<Map<string, GradeStudent>>(new Map());
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitModalVisible, setSubmitModalVisible] = useState(false);
@@ -65,67 +65,101 @@ const TeacherGradesPage = () => {
   const handleCourseChange = (courseId: string) => {
     setSelectedCourseId(courseId);
     setEditMode(false);
-    setEditingStudents([]);
+    setEditingStudents(new Map());
+  };
+
+  // 判断学生是否可编辑（只有草稿和已驳回状态可编辑）
+  const isStudentEditable = (student: GradeStudent) => {
+    return student.gradeStatus === 'draft' || student.gradeStatus === 'rejected' || !student.gradeStatus;
   };
 
   const handleStartEdit = () => {
     if (gradeData?.students) {
-      setEditingStudents(gradeData.students.map(s => ({ ...s })));
+      const map = new Map<string, GradeStudent>();
+      // 只添加可编辑的学生
+      gradeData.students
+        .filter(s => isStudentEditable(s))
+        .forEach(s => {
+          map.set(s.studentId, { ...s });
+        });
+      setEditingStudents(map);
       setEditMode(true);
     }
   };
 
   const handleCancelEdit = () => {
     setEditMode(false);
-    setEditingStudents([]);
+    setEditingStudents(new Map());
   };
 
-  const handleStudentChange = useCallback((studentId: string, field: keyof GradeStudent, value: unknown) => {
-    setEditingStudents(prev => 
-      prev.map(s => s.studentId === studentId ? { ...s, [field]: value } : s)
-    );
+  const updateStudent = useCallback((studentId: string, updates: Partial<GradeStudent>) => {
+    setEditingStudents(prev => {
+      const newMap = new Map(prev);
+      const student = newMap.get(studentId);
+      if (student) {
+        newMap.set(studentId, { ...student, ...updates });
+      }
+      return newMap;
+    });
   }, []);
 
   const handleScoreChange = useCallback((studentId: string, score: number | null) => {
-    setEditingStudents(prev => 
-      prev.map(s => {
-        if (s.studentId !== studentId) return s;
-        const newScore = score ?? 0;
-        let gradeLevel: 'excellent' | 'good' | 'medium' | 'pass' | 'fail' = 'fail';
-        if (newScore >= 90) gradeLevel = 'excellent';
-        else if (newScore >= 80) gradeLevel = 'good';
-        else if (newScore >= 70) gradeLevel = 'medium';
-        else if (newScore >= 60) gradeLevel = 'pass';
-        return { ...s, score: newScore, gradeLevel, gradeType: 'score' };
-      })
-    );
-  }, []);
+    const newScore = score ?? 0;
+    let gradeLevel: 'excellent' | 'good' | 'medium' | 'pass' | 'fail' = 'fail';
+    if (newScore >= 90) gradeLevel = 'excellent';
+    else if (newScore >= 80) gradeLevel = 'good';
+    else if (newScore >= 70) gradeLevel = 'medium';
+    else if (newScore >= 60) gradeLevel = 'pass';
+    
+    updateStudent(studentId, { score: newScore, gradeLevel, gradeType: 'score' });
+  }, [updateStudent]);
 
   const handleGradeLevelChange = useCallback((studentId: string, level: 'excellent' | 'good' | 'medium' | 'pass' | 'fail') => {
-    setEditingStudents(prev => 
-      prev.map(s => {
-        if (s.studentId !== studentId) return s;
-        const range = gradeLevelMap[level].range;
-        return { ...s, score: range[0], gradeLevel: level, gradeType: 'level' };
-      })
-    );
-  }, []);
+    const range = gradeLevelMap[level].range;
+    updateStudent(studentId, { score: range[0], gradeLevel: level, gradeType: 'level' });
+  }, [updateStudent]);
+
+  const handleSaveSingle = async (student: GradeStudent) => {
+    if (!selectedCourseId) return;
+    
+    try {
+      await api.post('/teacher/grades', {
+        courseId: selectedCourseId,
+        studentId: student.studentId,
+        score: student.score,
+        gradeLevel: student.gradeLevel,
+        gradeType: student.gradeType,
+        remark: student.remark
+      });
+      message.success(`${student.studentName} 成绩保存成功`);
+      refetch();
+    } catch {
+      message.error('保存失败');
+    }
+  };
 
   const handleSaveAll = async () => {
     if (!selectedCourseId) return;
     
-    const grades = editingStudents.map(s => ({
-      studentId: s.studentId,
-      score: s.score,
-      gradeLevel: s.gradeLevel,
-      gradeType: s.gradeType,
-      remark: s.remark
-    }));
+    const grades = Array.from(editingStudents.values())
+      .filter(s => s.score !== undefined && s.score !== null)
+      .map(s => ({
+        studentId: s.studentId,
+        score: s.score,
+        gradeLevel: s.gradeLevel,
+        gradeType: s.gradeType,
+        remark: s.remark
+      }));
+    
+    if (grades.length === 0) {
+      message.warning('没有可保存的成绩');
+      return;
+    }
     
     setSaving(true);
     try {
       await api.post('/teacher/grades/batch', { courseId: selectedCourseId, grades });
-      message.success('成绩保存成功');
+      message.success(`成功保存 ${grades.length} 条成绩`);
       setEditMode(false);
       refetch();
     } catch {
@@ -135,18 +169,31 @@ const TeacherGradesPage = () => {
     }
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (force = false) => {
     if (!selectedCourseId) return;
     
     setSubmitting(true);
     try {
-      await api.post(`/teacher/grades/submit/${selectedCourseId}`);
+      const url = force 
+        ? `/teacher/grades/submit/${selectedCourseId}?force=true`
+        : `/teacher/grades/submit/${selectedCourseId}`;
+      await api.post(url);
       message.success('成绩已提交审核');
       setSubmitModalVisible(false);
       refetch();
     } catch (err: unknown) {
-      const error = err as { response?: { data?: { message?: string } } };
-      message.error(error.response?.data?.message || '提交失败');
+      const error = err as { response?: { data?: { message?: string; data?: { needConfirm?: boolean } } } };
+      if (error.response?.data?.data?.needConfirm) {
+        Modal.confirm({
+          title: '确认提交',
+          content: error.response.data.message,
+          okText: '确认提交',
+          cancelText: '取消',
+          onOk: () => handleSubmit(true),
+        });
+      } else {
+        message.error(error.response?.data?.message || '提交失败');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -184,13 +231,14 @@ const TeacherGradesPage = () => {
         try {
           const text = e.target?.result as string;
           const lines = text.split('\n').slice(1);
-          const grades: GradeStudent[] = [];
+          const newMap = new Map<string, GradeStudent>();
           
           lines.forEach(line => {
             if (!line.trim()) return;
             const [studentNumber, , , scoreStr, levelStr, remark] = line.split(',');
             const student = gradeData?.students.find(s => s.studentNumber === studentNumber.trim());
-            if (student) {
+            // 只导入可编辑的学生
+            if (student && isStudentEditable(student)) {
               const score = parseFloat(scoreStr) || 0;
               let gradeLevel: 'excellent' | 'good' | 'medium' | 'pass' | 'fail' = 'fail';
               const levelText = levelStr?.trim();
@@ -199,7 +247,7 @@ const TeacherGradesPage = () => {
               else if (levelText === '中等') gradeLevel = 'medium';
               else if (levelText === '及格') gradeLevel = 'pass';
               
-              grades.push({
+              newMap.set(student.studentId, {
                 ...student,
                 score,
                 gradeLevel,
@@ -209,9 +257,9 @@ const TeacherGradesPage = () => {
             }
           });
           
-          setEditingStudents(grades);
+          setEditingStudents(newMap);
           setEditMode(true);
-          message.success(`成功导入 ${grades.length} 条成绩`);
+          message.success(`成功导入 ${newMap.size} 条成绩`);
         } catch {
           message.error('文件解析失败');
         }
@@ -228,67 +276,100 @@ const TeacherGradesPage = () => {
     {
       title: '成绩类型',
       key: 'gradeType',
-      width: 100,
-      render: (_: unknown, record: GradeStudent) => (
-        editMode ? (
+      width: 120,
+      render: (_: unknown, record: GradeStudent) => {
+        const editable = isStudentEditable(record);
+        const student = editMode && editable ? editingStudents.get(record.studentId) : record;
+        const gradeType = student?.gradeType || 'score';
+        
+        if (editMode && !editable) {
+          return <Tag>{gradeType === 'level' ? '等级制' : '百分制'}</Tag>;
+        }
+        
+        if (!editMode) {
+          return <Tag>{gradeType === 'level' ? '等级制' : '百分制'}</Tag>;
+        }
+        
+        return (
           <Radio.Group 
-            key={`type-${record.studentId}`}
-            value={record.gradeType || 'score'} 
-            onChange={(e) => handleStudentChange(record.studentId, 'gradeType', e.target.value)}
+            value={gradeType}
+            onChange={(e) => updateStudent(record.studentId, { gradeType: e.target.value })}
             size="small"
           >
             <Radio.Button value="score">分数</Radio.Button>
             <Radio.Button value="level">等级</Radio.Button>
           </Radio.Group>
-        ) : (
-          <Tag>{record.gradeType === 'level' ? '等级制' : '百分制'}</Tag>
-        )
-      )
+        );
+      }
     },
     {
       title: '分数',
-      dataIndex: 'score',
       key: 'score',
       width: 100,
-      render: (score: number, record: GradeStudent) => (
-        editMode && record.gradeType !== 'level' ? (
-          <InputNumber
-            key={`score-${record.studentId}`}
-            min={0}
-            max={100}
-            value={score}
-            onChange={(v) => handleScoreChange(record.studentId, v)}
-            size="small"
-          />
-        ) : (
+      render: (_: unknown, record: GradeStudent) => {
+        const editable = isStudentEditable(record);
+        const student = editMode && editable ? editingStudents.get(record.studentId) : record;
+        const score = student?.score;
+        const gradeType = student?.gradeType || 'score';
+        
+        if (editMode && !editable) {
+          return (
+            <span style={{ fontWeight: 'bold', color: (score ?? 0) >= 60 ? '#52c41a' : '#ff4d4f' }}>
+              {score ?? '-'}
+            </span>
+          );
+        }
+        
+        if (editMode && editable && gradeType !== 'level') {
+          return (
+            <InputNumber
+              min={0}
+              max={100}
+              value={score}
+              onChange={(v) => handleScoreChange(record.studentId, v)}
+              size="small"
+            />
+          );
+        }
+        
+        return (
           <span style={{ fontWeight: 'bold', color: (score ?? 0) >= 60 ? '#52c41a' : '#ff4d4f' }}>
             {score ?? '-'}
           </span>
-        )
-      )
+        );
+      }
     },
     {
       title: '等级',
-      dataIndex: 'gradeLevel',
       key: 'gradeLevel',
       width: 100,
-      render: (level: string, record: GradeStudent) => (
-        editMode && record.gradeType === 'level' ? (
-          <Select
-            key={`level-${record.studentId}`}
-            value={level}
-            onChange={(v) => handleGradeLevelChange(record.studentId, v)}
-            size="small"
-            style={{ width: 80 }}
-          >
-            {Object.entries(gradeLevelMap).map(([key, { label }]) => (
-              <Option key={key} value={key}>{label}</Option>
-            ))}
-          </Select>
-        ) : (
-          level && <Tag color={gradeLevelMap[level]?.color}>{gradeLevelMap[level]?.label}</Tag>
-        )
-      )
+      render: (_: unknown, record: GradeStudent) => {
+        const editable = isStudentEditable(record);
+        const student = editMode && editable ? editingStudents.get(record.studentId) : record;
+        const level = student?.gradeLevel;
+        const gradeType = student?.gradeType || 'score';
+        
+        if (editMode && !editable) {
+          return level ? <Tag color={gradeLevelMap[level]?.color}>{gradeLevelMap[level]?.label}</Tag> : '-';
+        }
+        
+        if (editMode && editable && gradeType === 'level') {
+          return (
+            <Select
+              value={level}
+              onChange={(v) => handleGradeLevelChange(record.studentId, v)}
+              size="small"
+              style={{ width: 80 }}
+            >
+              {Object.entries(gradeLevelMap).map(([key, { label }]) => (
+                <Option key={key} value={key}>{label}</Option>
+              ))}
+            </Select>
+          );
+        }
+        
+        return level ? <Tag color={gradeLevelMap[level]?.color}>{gradeLevelMap[level]?.label}</Tag> : '-';
+      }
     },
     {
       title: '状态',
@@ -308,82 +389,81 @@ const TeacherGradesPage = () => {
     },
     {
       title: '备注',
-      dataIndex: 'remark',
       key: 'remark',
       width: 150,
-      render: (remark: string, record: GradeStudent) => (
-        editMode ? (
-          <Input
-            key={`remark-${record.studentId}`}
-            value={remark}
-            onChange={(e) => handleStudentChange(record.studentId, 'remark', e.target.value)}
-            size="small"
-            placeholder="备注"
-          />
-        ) : (
-          remark || '-'
-        )
-      )
+      render: (_: unknown, record: GradeStudent) => {
+        const editable = isStudentEditable(record);
+        const student = editMode && editable ? editingStudents.get(record.studentId) : record;
+        const remark = student?.remark;
+        
+        if (editMode && !editable) {
+          return remark || '-';
+        }
+        
+        if (editMode && editable) {
+          return (
+            <Input
+              value={remark}
+              onChange={(e) => updateStudent(record.studentId, { remark: e.target.value })}
+              size="small"
+              placeholder="备注"
+            />
+          );
+        }
+        
+        return remark || '-';
+      }
     },
     {
       title: '操作',
       key: 'action',
       width: 80,
-      render: (_: unknown, record: GradeStudent) => (
-        editMode && (
+      render: (_: unknown, record: GradeStudent) => {
+        if (!editMode) return null;
+        const editable = isStudentEditable(record);
+        if (!editable) {
+          return <span style={{ color: '#999', fontSize: 12 }}>不可编辑</span>;
+        }
+        const student = editingStudents.get(record.studentId);
+        return (
           <Button 
             type="link" 
             size="small" 
-            onClick={() => handleSaveSingle(record)}
-            disabled={record.score === undefined || record.score === null}
+            onClick={() => student && handleSaveSingle(student)}
+            disabled={!student?.score}
           >
             保存
           </Button>
-        )
-      )
+        );
+      }
     },
   ];
 
-  const handleSaveSingle = async (student: GradeStudent) => {
-    if (!selectedCourseId) return;
-    
-    try {
-      await api.post('/teacher/grades', {
-        courseId: selectedCourseId,
-        studentId: student.studentId,
-        score: student.score,
-        gradeLevel: student.gradeLevel,
-        gradeType: student.gradeType,
-        remark: student.remark
-      });
-      message.success(`${student.studentName} 成绩保存成功`);
-      refetch();
-    } catch {
-      message.error('保存失败');
-    }
-  };
-
   const statistics = useMemo(() => {
-    const students = editMode ? editingStudents : gradeData?.students || [];
+    const students = gradeData?.students || [];
     const total = students.length;
-    const graded = students.filter(s => s.score !== undefined && s.score !== null).length;
-    const excellent = students.filter(s => (s.score ?? 0) >= 90).length;
-    const good = students.filter(s => (s.score ?? 0) >= 80 && (s.score ?? 0) < 90).length;
-    const fail = students.filter(s => (s.score ?? 0) < 60).length;
+    const gradedStudents = students.filter(s => s.score !== undefined && s.score !== null);
+    const graded = gradedStudents.length;
+    const excellent = gradedStudents.filter(s => Number(s.score) >= 90).length;
+    const good = gradedStudents.filter(s => Number(s.score) >= 80 && Number(s.score) < 90).length;
+    const fail = gradedStudents.filter(s => Number(s.score) < 60).length;
     const avgScore = graded > 0 
-      ? (students.reduce((sum, s) => sum + (s.score ?? 0), 0) / graded).toFixed(1)
+      ? (gradedStudents.reduce((sum, s) => sum + Number(s.score), 0) / graded).toFixed(1)
       : '-';
     
     return { total, graded, excellent, good, fail, avgScore };
-  }, [editMode, editingStudents, gradeData?.students]);
+  }, [gradeData?.students]);
 
   const canSubmit = useMemo(() => {
     if (!gradeData?.students) return false;
-    return gradeData.students.every(s => s.score !== undefined && s.score !== null);
+    return gradeData.students.some(s => s.gradeStatus === 'draft' || s.gradeStatus === 'rejected');
   }, [gradeData?.students]);
 
-  const hasSubmitted = useMemo(() => {
-    return gradeData?.students?.some(s => s.gradeStatus === 'submitted' || s.gradeStatus === 'approved');
+  const hasAllSubmitted = useMemo(() => {
+    if (!gradeData?.students) return false;
+    return gradeData.students.every(s => 
+      s.gradeStatus === 'submitted' || s.gradeStatus === 'approved'
+    );
   }, [gradeData?.students]);
 
   return (
@@ -408,9 +488,9 @@ const TeacherGradesPage = () => {
               ))}
             </Select>
             
-            {selectedCourseId && !editMode && !hasSubmitted && (
+            {selectedCourseId && !editMode && !hasAllSubmitted && (
               <Button type="primary" icon={<EditOutlined />} onClick={handleStartEdit}>
-                开始录入
+                {gradeData?.students?.some(s => s.gradeStatus === 'draft' || s.gradeStatus === 'rejected') ? '继续录入' : '开始录入'}
               </Button>
             )}
             
@@ -423,7 +503,7 @@ const TeacherGradesPage = () => {
               </>
             )}
             
-            {selectedCourseId && !editMode && canSubmit && !hasSubmitted && (
+            {selectedCourseId && !editMode && canSubmit && !hasAllSubmitted && (
               <Button type="primary" icon={<SendOutlined />} onClick={() => setSubmitModalVisible(true)}>
                 提交审核
               </Button>
@@ -473,7 +553,7 @@ const TeacherGradesPage = () => {
             >
               <Table
                 columns={columns}
-                dataSource={editMode ? editingStudents : gradeData.students}
+                dataSource={gradeData?.students || []}
                 rowKey="studentId"
                 loading={gradeLoading}
                 pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 人` }}

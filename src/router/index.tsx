@@ -12,6 +12,7 @@ const NotificationsPage = lazy(() => import('@/pages/Notifications'));
 const CourseSelectionPage = lazy(() => import('@/pages/student/Courses'));
 const MySchedulePage = lazy(() => import('@/pages/student/Schedule'));
 const MySelectionsPage = lazy(() => import('@/pages/student/Selections'));
+const StudentGradesPage = lazy(() => import('@/pages/student/Grades'));
 
 const TeacherCoursesPage = lazy(() => import('@/pages/teacher/Courses'));
 const TeacherStudentsPage = lazy(() => import('@/pages/teacher/Students'));
@@ -28,6 +29,7 @@ const AdminLogsPage = lazy(() => import('@/pages/admin/Logs'));
 const AdminSelectionRulesPage = lazy(() => import('@/pages/admin/SelectionRules'));
 const AdminReportsPage = lazy(() => import('@/pages/admin/Reports'));
 const AdminReviewsPage = lazy(() => import('@/pages/admin/Reviews'));
+const AdminGradesPage = lazy(() => import('@/pages/admin/Grades'));
 
 const AuthGuard = ({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: string[] }) => {
   const { isAuthenticated, user } = useUserStore();
@@ -122,6 +124,14 @@ export const router = createBrowserRouter([
         element: (
           <Suspense fallback={<LoadingFallback />}>
             <MySelectionsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'grades',
+        element: (
+          <Suspense fallback={<LoadingFallback />}>
+            <StudentGradesPage />
           </Suspense>
         ),
       },
@@ -304,6 +314,14 @@ export const router = createBrowserRouter([
         element: (
           <Suspense fallback={<LoadingFallback />}>
             <AdminReviewsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'grades',
+        element: (
+          <Suspense fallback={<LoadingFallback />}>
+            <AdminGradesPage />
           </Suspense>
         ),
       },

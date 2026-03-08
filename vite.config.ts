@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import importToCDN from 'vite-plugin-cdn-import';
 
 export default defineConfig({
   plugins: [
@@ -8,6 +9,25 @@ export default defineConfig({
       babel: {
         plugins: [['babel-plugin-react-compiler']],
       },
+    }),
+    importToCDN({
+      modules: [
+        {
+          name: 'dayjs',
+          var: 'dayjs',
+          path: 'https://unpkg.com/dayjs@1.11.13/dayjs.min.js',
+        },
+        {
+          name: 'axios',
+          var: 'axios',
+          path: 'https://unpkg.com/axios@1.7.7/dist/axios.min.js',
+        },
+        {
+          name: 'echarts',
+          var: 'echarts',
+          path: 'https://unpkg.com/echarts@5.5.1/dist/echarts.min.js',
+        },
+      ],
     }),
   ],
   resolve: {
@@ -35,8 +55,11 @@ export default defineConfig({
             if (id.includes('antd') || id.includes('@ant-design')) {
               return 'ui-vendor';
             }
-            if (id.includes('@tanstack') || id.includes('zustand') || id.includes('axios')) {
+            if (id.includes('@tanstack') || id.includes('zustand')) {
               return 'data-vendor';
+            }
+            if (id.includes('recharts')) {
+              return 'chart-vendor';
             }
           }
         },

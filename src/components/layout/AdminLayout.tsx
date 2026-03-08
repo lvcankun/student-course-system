@@ -14,6 +14,7 @@ import {
   ScheduleOutlined,
   PieChartOutlined,
   StarOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useUserStore, useUIStore } from '@/store';
@@ -68,6 +69,11 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       key: '/admin/reviews',
       icon: <StarOutlined />,
       label: '评价管理',
+    },
+    {
+      key: '/admin/grades',
+      icon: <TrophyOutlined />,
+      label: '成绩管理',
     },
     {
       key: '/admin/reports',
