@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query, getConnection } from './config/database.js';
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const JWT_SECRET = 'your-secret-key';
 
 // 中间件
@@ -35,6 +35,22 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// ==================== 健康检查 ====================
+app.get('/api', (req, res) => {
+  res.json({ 
+    code: 0, 
+    message: 'Course Selection API is running', 
+    data: { 
+      status: 'ok',
+      timestamp: new Date().toISOString()
+    } 
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // ==================== 认证API ====================
 
