@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://baroscopical-charla-unexterminable.ngrok-free.dev/api/:path*"
+    },
+       {
+      "source": "/(.*)",
+      "destination": "/"
     }
   ],
   "headers": [

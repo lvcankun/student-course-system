@@ -52,6 +52,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/api/ping', (req, res) => {
+  res.json({ code: 0, message: 'pong', data: { timestamp: new Date().toISOString() } });
+});
+
 // ==================== 认证API ====================
 
 // 登录
